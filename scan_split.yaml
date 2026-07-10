@@ -1,0 +1,37 @@
+# Cross-subject train/val/test split for the NeurdyLab/NeuroBOLT dataset (29 scans).
+# All scans of a subject are kept in the same split. Edit these lists to change the split.
+
+train:
+  - sub01-scan01
+  - sub02-scan01
+  - sub03-scan02
+  - sub04-scan01
+  - sub05-scan01
+  - sub08-scan01
+  - sub08-scan02
+  - sub09-scan01
+  - sub09-scan02
+  - sub10-scan02
+  - sub12-scan01
+  - sub12-scan02
+  - sub14-scan01
+  - sub14-scan02
+  - sub17-scan02
+  - sub19-scan02
+  - sub20-scan01
+  - sub20-scan02
+
+val:
+  - sub06-scan01
+  - sub13-scan01
+  - sub13-scan02
+  - sub15-scan01
+  - sub22-scan01
+
+test:
+  - sub07-scan01
+  - sub07-scan02
+  - sub11-scan01
+  - sub16-scan01
+  - sub18-scan01
+  - sub21-scan01

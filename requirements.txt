@@ -1,0 +1,18 @@
+# PyTorch (torch/torchvision/torchaudio) is installed separately via conda; see README Setup.
+# The linear-attention-transformer sub-deps are pinned to torch-2.0-compatible versions:
+# newer local-attention / product-key-memory / axial-positional-embedding pull in torch>=2.1
+# and heavy extra deps, which would clobber the conda-installed torch.
+linear-attention-transformer==0.19.1
+local-attention==1.4.4
+linformer==0.2.3
+product-key-memory==0.1.10
+axial-positional-embedding==0.2.1
+timm==0.6.12
+numpy==1.23.5
+pandas==1.5.3
+einops==0.4.0
+scipy==1.10.0
+mne==1.3.1
+scikit-learn==1.2.2
+huggingface_hub==0.21.4
+pyyaml==6.0
