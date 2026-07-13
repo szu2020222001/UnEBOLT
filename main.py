@@ -44,7 +44,8 @@ def get_args():
     parser.add_argument('--batch_size', default=64, type=int)
     parser.add_argument('--epochs', default=20, type=int)
     parser.add_argument('--update_freq', default=1, type=int)
-    parser.add_argument('--save_ckpt_freq', default=5, type=int)
+    parser.add_argument('--save_ckpt_freq', default=1, type=int,
+                        help='save a checkpoint every N epochs (1 = every epoch)')
 
     # Model parameters
     parser.add_argument('--model', default='unebolt', type=str, metavar='MODEL',
@@ -567,6 +568,13 @@ def main(args):
                     utils.save_model(
                         args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
                         loss_scaler=loss_scaler, epoch=epochname, model_ema=model_ema)
+
+            # Periodic save: keep a checkpoint every --save_ckpt_freq epochs
+            # (--save_ckpt_freq 1 = every epoch), in addition to the best-val-loss one above.
+            if args.output_dir and args.save_ckpt and args.save_ckpt_freq and (epoch + 1) % args.save_ckpt_freq == 0:
+                utils.save_model(
+                    args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
+                    loss_scaler=loss_scaler, epoch=epochname, model_ema=model_ema)
 
             print(f'Min loss val: {min_loss:.2f}, max corr test: {max_corr_test:.2f}')
             if log_writer is not None:

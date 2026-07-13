@@ -77,7 +77,7 @@ def _process_fmri_series(df_fmri, labels_roi_full, args):
     low = 0.15 / nyquist
     b, a = butter(N=5, Wn=low, btype='low', analog=False)
     fmri_np = filtfilt(b, a, fmri_np, axis=1)
-    fmri_norm, _ = preproc.normalize_data(fmri_np, mode='zscore')
+    fmri_norm, _ = preproc.normalize_data(fmri_np, mode='absmax')
     return fmri_norm
 
 
