@@ -19,9 +19,16 @@ def read_scan(root, row):
 
 
 def aggregate(rows):
+    """扫描记录 → 被试记录 → 每频段总体统计。
+
+    rows 每行是一个扫描/频段的 metrics() 结果。
+    一人多扫描先等权汇总，再对被试等权；不把重叠窗口当独立统计样本。
+    返回扫描表、被试表和逐指标汇总表。
+    """
     frame = pd.DataFrame(rows)
     keys = [c for c in frame if c not in ('scan','subject','band')]
     subjects=[]
+    # 相关用 Fisher-z 平均；误差、F1、有效率等用算术平均。
     for (u,f), group in frame.groupby(['subject','band']):
         row=dict(subject=u,band=f)
         for k in keys:
@@ -29,14 +36,18 @@ def aggregate(rows):
         subjects.append(row)
     summary=[]
     sub=pd.DataFrame(subjects)
+    # 固定 bootstrap 随机数，按整名被试有放回重采样 1000 次。
     rng=np.random.default_rng(2026)
     for f,group in sub.groupby('band'):
         for k in keys:
+            # 各指标排除 NaN 后的被试数可能不同，valid_subjects 会明确记录。
             v=group[k].to_numpy(); v=v[np.isfinite(v)]
             fn=fisher_mean if k in ('spatial_r','temporal_r') else np.mean
             point=float(fn(v)) if len(v) else np.nan
             boot=[fn(rng.choice(v,len(v),replace=True)) for _ in range(1000)] if len(v)>1 else []
             ci=np.quantile(boot,[.025,.975]) if boot else [np.nan,np.nan]
+            # CI 为 bootstrap 百分位区间；subject_sd 是原始指标尺度上的样本标准差。
+            # 只有一名有效被试时不计算跨被试 SD 或 CI。
             summary.append(dict(band=f,metric=k,mean=point,subject_sd=float(np.std(v,ddof=1)) if len(v)>1 else np.nan,
                                 ci_low=ci[0],ci_high=ci[1],valid_subjects=len(v)))
     return frame,sub,pd.DataFrame(summary)
@@ -124,12 +135,15 @@ def main(argv=None):
                 pd.DataFrame(log).to_csv(out/'training.csv',index=False)
                 if val<best:
                     best=val; torch.save(model.state_dict(),out/'best.pt')
+    # 评测阶段：神经网络加载验证 MSE 最佳的检查点，不在测试集重新训练。
     if a.model=='ridge': reg=joblib.load(out/'ridge.joblib')
     if a.model in ('mlp','tcn'):
         model=Predictor(config['rois'],config['frames'],len(bands),kind=a.model).to(a.device)
         model.load_state_dict(torch.load(out/'best.pt',map_location=a.device,weights_only=True)); model.eval()
     rows=[]
+    # 按完整扫描预测，避免跨扫描拼接计算时间相关。
     for r in by[a.eval_split]:
+        # 仅应用训练集保存的逐 ROI 标准化参数。
         x,y=read_scan(root,r); xn=((x-mean)/std).astype('float32')
         if a.model=='template': pred=np.broadcast_to(template,y.shape).copy()
         elif a.model=='ridge': pred=np.clip(reg.predict(xn.reshape(len(xn),-1)),0,1).reshape(y.shape)
@@ -137,8 +151,10 @@ def main(argv=None):
             with torch.no_grad():
                 pred=np.concatenate([model(torch.from_numpy(xn[i:i+a.batch_size]).to(a.device)).cpu().numpy() for i in range(0,len(xn),a.batch_size)])
         np.savez_compressed(out/f'{a.eval_split}_{r["scan"]}_predictions.npz',prediction=pred,target=y)
+        # 六频段各自计算指标；保留扫描和被试身份供分层汇总。
         for f,band in enumerate(bands):
             rows.append(dict(scan=r['scan'],subject=r['subject'],band=band,**metrics(y[:,f],pred[:,f],template[f])))
+    # 三张 CSV 分别用于逐扫描排查、被试层面比较和总体报告。
     scan,subject,summary=aggregate(rows)
     for name,df in [('scans',scan),('subjects',subject),('summary',summary)]:
         df.to_csv(out/f'{a.eval_split}_{name}.csv',index=False)
