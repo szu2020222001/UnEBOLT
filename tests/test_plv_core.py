@@ -24,4 +24,3 @@ def test_model_shape_and_backward():
         y=m(torch.randn(3,10,64))
         assert y.shape==(3,6,325) and bool(((y>0)&(y<1)).all())
         y.mean().backward()
-

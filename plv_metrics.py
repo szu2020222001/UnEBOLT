@@ -31,4 +31,3 @@ def metrics(y, pred, template):
         hi = np.argsort(-pred, axis=-1, kind='stable')[:, :k]
         out[f'f1_{q}'] = float(np.mean([len(np.intersect1d(g,h))/k for g,h in zip(gi,hi)]))
     return out
-

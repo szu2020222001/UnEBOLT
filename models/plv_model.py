@@ -28,4 +28,3 @@ class Predictor(nn.Module):
             x = self.temporal(self.project(x).transpose(1, 2)).transpose(1, 2)
         x = self.hidden(x.flatten(1))
         return torch.stack([h(x).sigmoid() for h in self.heads], dim=1)
-

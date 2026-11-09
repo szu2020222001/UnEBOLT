@@ -8,3 +8,5 @@ checkpoints/
 .venv/
 .vscode/
 *.log
+BOLD_to_EEG_PLV_review/
+tools/audit_plv_data.py
