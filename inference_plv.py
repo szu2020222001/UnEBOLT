@@ -3,7 +3,8 @@
 示例：python inference_plv.py --data <数据目录> --output <训练运行目录>
       --model tcn --eval-split test --device cuda
 默认评测 val；test 需显式指定。模型类型须与训练时一致。
-output 中须已有 run.json、state.npz 和对应模型文件。
+output 指向实验根目录；training/ 中须已有 run.json、state.npz 和模型文件。
+每次评测新建 evaluations/<时间戳_UUID>_<split>/，不会覆盖旧结果。
 """
 import sys
 from engine_plv import main

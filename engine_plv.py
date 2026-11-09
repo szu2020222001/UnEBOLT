@@ -9,6 +9,8 @@ import torch
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.linear_model import Ridge
 import joblib
+from plv_tracking import now, write_json, save_provenance, training_dir, new_evaluation, data_identity, sha256
+from experiment_ledger import generate
 from models.plv_model import Predictor
 from plv_metrics import metrics, fisher_mean
 
@@ -64,14 +66,22 @@ def main(argv=None):
     p.add_argument('--seed',type=int,default=2026)
     p.add_argument('--device',default='cuda')
     p.add_argument('--eval-only',action='store_true')
+    p.add_argument('--notes',default='',help='Purpose/change being tested; saved in the experiment ledger')
     p.add_argument('--eval-split',choices=['val','test'],default='val')
     a=p.parse_args(argv)
     random.seed(a.seed); np.random.seed(a.seed); torch.manual_seed(a.seed)
     if torch.cuda.is_available(): torch.cuda.manual_seed_all(a.seed)
     torch.backends.cudnn.benchmark=False
-    root,out=Path(a.data),Path(a.output); out.mkdir(parents=True,exist_ok=True)
+    root,run=Path(a.data),Path(a.output)
+    run.mkdir(parents=True,exist_ok=True)
+    out=training_dir(run) if a.eval_only else run/'training'
+    if not a.eval_only:
+        if any(run.iterdir()):
+            raise ValueError('Run directory is not empty; use a new output directory')
+        out.mkdir()
     manifest=json.loads((root/'manifest.json').read_text())
     config=manifest['config']; bands=list(config['bands'])
+    identity=data_identity(root,manifest)
     by={s:[r for r in manifest['scans'] if r['split']==s] for s in ('train','val','test')}
     if not all(by.values()): raise ValueError('A complete train/val/test manifest is required')
     def concat(part):
@@ -86,6 +96,8 @@ def main(argv=None):
         saved=json.loads((out/'run.json').read_text())
         if saved['data_signature']!=manifest['signature'] or saved['model']!=a.model:
             raise ValueError('Model/data configuration mismatch')
+        if saved.get('data_identity') and saved['data_identity']!=identity:
+            raise ValueError('Dataset contents or split changed since training')
     else:
         xt,yt=concat('train'); xv,yv=concat('val')
         # One contribution per physical BOLD frame, not duplicated overlapping windows.
@@ -101,8 +113,11 @@ def main(argv=None):
         us=sorted(set(u for u,_ in scan_templates))
         template=np.mean([np.mean([v for u,v in scan_templates if u==s],axis=0) for s in us],axis=0)
         np.savez(statepath,mean=mean,std=std,template=template)
-        (out/'run.json').write_text(json.dumps(dict(vars(a),data_signature=manifest['signature'],
-                    torch=torch.__version__,cuda=torch.version.cuda),indent=2))
+        record=dict(vars(a),data_signature=manifest['signature'],data_identity=identity,
+                    torch=torch.__version__,cuda=torch.version.cuda,started_at=now(),status='running',
+                    provenance=save_provenance(out))
+        write_json(out/'run.json',record)
+        write_json(out/'manifest.json',manifest)
         xt=((xt-mean)/std).astype('float32'); xv=((xv-mean)/std).astype('float32')
         if a.model=='ridge':
             best=float('inf'); scores=[]
@@ -135,11 +150,21 @@ def main(argv=None):
                 pd.DataFrame(log).to_csv(out/'training.csv',index=False)
                 if val<best:
                     best=val; torch.save(model.state_dict(),out/'best.pt')
+    if not a.eval_only:
+        record.update(status='completed',finished_at=now())
+        write_json(out/'run.json',record)
     # 评测阶段：神经网络加载验证 MSE 最佳的检查点，不在测试集重新训练。
     if a.model=='ridge': reg=joblib.load(out/'ridge.joblib')
     if a.model in ('mlp','tcn'):
         model=Predictor(config['rois'],config['frames'],len(bands),kind=a.model).to(a.device)
         model.load_state_dict(torch.load(out/'best.pt',map_location=a.device,weights_only=True)); model.eval()
+    evaluation=new_evaluation(run,a.eval_split)
+    checkpoint=out/({'ridge':'ridge.joblib','mlp':'best.pt','tcn':'best.pt'}.get(a.model,'state.npz'))
+    eval_record=dict(split=a.eval_split,model=a.model,status='running',started_at=now(),
+                     data_identity=identity,checkpoint_sha256=sha256(checkpoint),
+                     checkpoint=str(checkpoint.resolve()),provenance=save_provenance(evaluation),
+                     arguments=vars(a))
+    write_json(evaluation/'evaluation.json',eval_record)
     rows=[]
     # 按完整扫描预测，避免跨扫描拼接计算时间相关。
     for r in by[a.eval_split]:
@@ -150,15 +175,19 @@ def main(argv=None):
         else:
             with torch.no_grad():
                 pred=np.concatenate([model(torch.from_numpy(xn[i:i+a.batch_size]).to(a.device)).cpu().numpy() for i in range(0,len(xn),a.batch_size)])
-        np.savez_compressed(out/f'{a.eval_split}_{r["scan"]}_predictions.npz',prediction=pred,target=y)
+        np.savez_compressed(evaluation/f'{a.eval_split}_{r["scan"]}_predictions.npz',prediction=pred,target=y)
         # 六频段各自计算指标；保留扫描和被试身份供分层汇总。
         for f,band in enumerate(bands):
             rows.append(dict(scan=r['scan'],subject=r['subject'],band=band,**metrics(y[:,f],pred[:,f],template[f])))
     # 三张 CSV 分别用于逐扫描排查、被试层面比较和总体报告。
     scan,subject,summary=aggregate(rows)
     for name,df in [('scans',scan),('subjects',subject),('summary',summary)]:
-        df.to_csv(out/f'{a.eval_split}_{name}.csv',index=False)
+        df.to_csv(evaluation/f'{a.eval_split}_{name}.csv',index=False)
+    eval_record.update(status='completed',finished_at=now())
+    write_json(evaluation/'evaluation.json',eval_record)
     print(summary.to_string(index=False),flush=True)
+    print(f'Evaluation: {evaluation}',flush=True)
+    print(f'Ledger: {generate(run.parent)}',flush=True)
 
 
 if __name__=='__main__': main()

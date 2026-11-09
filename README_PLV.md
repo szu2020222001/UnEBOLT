@@ -57,7 +57,7 @@ python -m pytest tests/test_plv_core.py -q
 已验证环境：Python 3.12.3、PyTorch 2.15.0+cu132；GPU RTX 4070 Ti SUPER 16GB。精确依赖见 requirements-plv.lock.txt。后续安装可用 uv pip install --index-url https://pypi.tuna.tsinghua.edu.cn/simple；当前环境已安装完成。原始 common 参考由用户确认。
 
 
-全频段采用 0.5–45 Hz 的宽带 Hilbert 相位 PLV。宽带含多种振荡，瞬时相位的生理解释弱于窄带 PLV，单独报告，不与五子频段混成同一种解释。旧五频段数据和检查点保留；六频段必须使用新数据目录和新运行目录，例如 runs/tcn_6bands。
+全频段采用 0.5–45 Hz 的宽带 Hilbert 相位 PLV。宽带含多种振荡，瞬时相位的生理解释弱于窄带 PLV，单独报告，不与五子频段混成同一种解释。此前短训练的缓存和检查点已清理；六频段必须使用独立数据目录和运行目录，例如 runs/tcn_6bands。
 
 
 
@@ -70,3 +70,47 @@ python -m pytest tests/test_plv_core.py -q
 - build_plv_data.py：数据构建入口；plv_metrics.py：统计指标。
 
 原 UnEBOLT main.py/inference.py 保留作为 EEG→BOLD 参考。当前实现仅支持跨被试；所有 raw data、缓存、权重和个人 IDE 配置均不提交。正式训练前仍需验证伪迹质量和边缘缓冲。此前短训练结果已清理，不能作为实验结论。
+
+
+## 实验版本与 HTML 台账
+
+`--output` 始终指向实验根目录，例如 `runs/20261109_tcn_s2026_v1`，训练必须使用空目录。可用 `--notes "比较 TCN 与 MLP"` 记录实验目的。每次实验固定一个模型、数据版本和 seed。
+
+```text
+runs/
+  index.html                         # 自动生成的跨实验可视化台账
+  20261109_tcn_s2026_v1/
+    training/
+      run.json                       # 参数、时间、完成状态、Git、依赖版本
+      manifest.json                  # 训练时数据清单与划分快照
+      state.npz                      # 训练集 scaler 和被试等权模板
+      best.pt                        # 神经网络最佳权重；ridge 为 ridge.joblib
+      training.csv                   # 神经网络每 epoch 日志
+      source/                        # 本次执行的 PLV 源文件快照
+      source.patch                   # 有已跟踪文件修改时保存 Git patch
+    evaluations/
+      <UTC时间戳_UUID>_val/
+        evaluation.json              # 评估版本、数据校验、检查点哈希、时间与状态
+        source/                      # 评测时源文件快照
+        val_<scan>_predictions.npz
+        val_scans.csv
+        val_subjects.csv
+        val_summary.csv
+      <另一时间戳_UUID>_test/
+        ...
+```
+
+训练结束后默认评测一次 val。重复调用 inference_plv.py 仅加载 training/ 的产物，每次新建 evaluations/ 子目录，不覆盖训练记录和此前评测。也兼容读取旧版直接位于实验根目录的 state.npz/run.json，但旧实验未记录的数据版本无法追补。
+
+除处理配置签名外，每次训练/评测还对完整 manifest 和清单中的 NPZ 内容计算 SHA-256；若数据内容或划分发生变化，拒绝复用新格式实验的检查点。首次读取大数据会增加校验时间。源码快照保证工作区尚未提交的 PLV 修改也可追溯。数据构建版本仍需结合数据清单和保存的数据文件维护。
+
+训练和评测结束自动重建同级 runs/index.html。也可手动生成或指定输出：
+
+```bash
+python experiment_ledger.py --runs runs
+python experiment_ledger.py --runs runs --output reports/experiments.html
+```
+
+用浏览器打开 HTML 即可离线查看，无需服务器或第三方服务。支持实验名/模型/备注筛选、val/test 切换、频段与指标选择、按指标自动排序、横向条形图、被试 CI 与有效比例、数据/代码版本、完整配置展开及当前表格 CSV 导出。改动实验后需重新生成并刷新浏览器。不同数据清单会提示；即使校验一致，也需人工确认实验目的与统计方案可比较。相同 seed 的重复评测不会当作独立随机种子合并；每份评测单独展示。
+
+运行状态在启动时写入 running、成功后改为 completed；异常或中断留下 running，不能当成已完成实验。台账扫描 evaluations/ 中的评测记录，未完成记录不展示有效分数；只有训练尚未开始评测的目录可直接查看 training/run.json。当前仍仅保存最佳模型参数，不支持恢复 optimizer 状态续训。权重、预测和本地台账位于 Git 忽略的 runs/，需另行备份。
