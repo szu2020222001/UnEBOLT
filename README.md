@@ -1,3 +1,7 @@
+# BOLD → EEG PLV experimental branch
+
+This branch adds cross-subject BOLD-to-EEG PLV baselines (five sub-bands plus 0.5–45 Hz broadband). See [README_PLV.md](README_PLV.md) for WSL setup, data building, training and evaluation. The original UnEBOLT implementation and documentation follow.
+
 # UnEBOLT
 
 Code for the MIDL 2026 spotlight paper
