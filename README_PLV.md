@@ -129,3 +129,9 @@ python experiment_ledger.py --runs runs --output reports/experiments.html
 时间图固定 F3-F4、C3-C4、O1-O2、FZ-PZ 四条边，同时画真实、预测及训练模板，再画全边均值与逐窗口 MAE。横轴为实际 EEG 标签窗口中心；数据不平滑。空间图三列为真实/预测/有符号误差，三行为完整 PLV 矩阵、标准电极位置连接图、MNE 电极平均连接强度拓扑。矩阵屏蔽对角线；连接图保留 top25%（误差图按绝对值），拓扑数值为电极所有非对角连接的平均。各实验 PLV 使用 [0,1]、误差使用 [-1,1] 固定尺度。电极坐标采用 MNE standard_1020 标准 montage，不是个体实际测量位置，也不是脑源图。该固定案例不能替代全部测试被试的统计结论。
 
 脚本核对数据清单/固定扫描内容哈希和保存的真实标签，visualization.json 保存窗口时间与索引、选边规则、配色尺度、输入预测与绘图脚本哈希。生成图不改变训练权重或已有评测分数。Matplotlib 是显式依赖。
+
+## 独立时间损失消融
+
+仅对神经网络及 `--sampling scan_sequential` 开放辅助损失。`--loss temporal --aux-weight 0.01` 使用 MSE+0.01*(1-r)，r 在连续 batch 的窗口维中心化后逐频段/边计算再平均；目标方差 <=1e-10 的边不参与相关项，分母方差加 1e-8 稳定梯度。该训练近似与评估 Pearson 的 NaN/Fisher 汇总规则不同。`--loss delta --aux-weight 1.0` 使用 MSE+平均[(预测相邻差)-(真实相邻差)]²，比较 1TR 步长的差分，不除以 TR；无跨 batch 差分。少于两窗口时辅助项为可微零。纯 MSE 为默认值。
+
+运行 `python run_loss_ablation.py` 分别对 MLP/TCN 加入两项损失，seed=2026、50 epoch、batch=64、lr=3e-4，沿用 162 更新/epoch 的扫描连续采样。两种权重在测试前固定，不作权重搜索；检查点仍按验证窗口平均 MSE 选择，因此不是最大化时间相关的检查点。training.csv 分别保存 train_loss、train_mse、train_aux，验证记录 val_mse。`python summarize_losses.py` 汇总与已有连续分块纯 MSE 对照及被试配对差，输出 runs/loss_comparison_20261110。单 seed、5 测试被试，配对 CI 未做多重比较校正；相邻标签重叠 75%，差分目标幅度较小。已有测试集已查看，本轮属探索性迭代。
