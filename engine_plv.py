@@ -62,6 +62,8 @@ def main(argv=None):
     p.add_argument('--data',required=True)
     p.add_argument('--output',required=True)
     p.add_argument('--model',choices=['template','ridge','mlp','tcn','tcn_attention'],default='tcn')
+    p.add_argument('--hrf-prior',choices=['none','fixed','learnable'],default='none')
+    p.add_argument('--hrf-strength',type=float,default=.1)
     p.add_argument('--epochs',type=int,default=50)
     p.add_argument('--batch-size',type=int,default=64)
     p.add_argument('--lr',type=float,default=3e-4)
@@ -80,6 +82,7 @@ def main(argv=None):
     if a.aux_weight<0 or a.delta_weight<0: p.error('--aux-weight must be nonnegative')
     if not a.eval_only and a.loss!='mse' and (a.sampling!='scan_sequential' or a.model not in ('mlp','tcn','tcn_attention')):
         p.error('Sequence losses require neural model and --sampling scan_sequential')
+    if a.hrf_prior!='none' and a.model!='tcn_attention': p.error('HRF prior requires tcn_attention')
     random.seed(a.seed); np.random.seed(a.seed); torch.manual_seed(a.seed)
     if torch.cuda.is_available(): torch.cuda.manual_seed_all(a.seed)
     torch.backends.cudnn.benchmark=False
@@ -97,6 +100,8 @@ def main(argv=None):
         if a.bands is not None and a.bands!=saved_config.get('bands',all_bands):
             raise ValueError('Requested bands differ from trained bands')
         a.bands=saved_config.get('bands',all_bands)
+        a.hrf_prior=saved_config.get('hrf_prior','none')
+        a.hrf_strength=saved_config.get('hrf_strength',.1)
     bands=a.bands or all_bands
     if not bands or len(set(bands))!=len(bands) or any(b not in all_bands for b in bands):
         raise ValueError('Invalid bands')
@@ -152,7 +157,7 @@ def main(argv=None):
                 if score<best: best,reg=score,candidate
             joblib.dump(reg,out/'ridge.joblib'); pd.DataFrame(scores).to_csv(out/'ridge_search.csv',index=False)
         elif a.model in ('mlp','tcn','tcn_attention'):
-            model=Predictor(config['rois'],config['frames'],len(bands),kind=a.model,tr=config.get('tr',2.1),label_trs=config.get('label_trs',4)).to(a.device)
+            model=Predictor(config['rois'],config['frames'],len(bands),kind=a.model,tr=config.get('tr',2.1),label_trs=config.get('label_trs',4),hrf_prior=a.hrf_prior,hrf_strength=a.hrf_strength).to(a.device)
             optimizer=torch.optim.AdamW(model.parameters(),lr=a.lr,weight_decay=.01)
             dataset=TensorDataset(torch.from_numpy(xt),torch.from_numpy(yt))
             scan_sampler=None
@@ -197,6 +202,11 @@ def main(argv=None):
                 val_r=fisher_mean([fisher_mean(values) for values in subject_r.values()])
                 val_valid=float(np.mean([np.mean(values) for values in subject_valid.values()]))
                 log.append(dict(epoch=epoch,train_mse=mse_total/len(xt),train_loss=total/len(xt),train_aux=aux_total/len(xt),val_mse=val,val_temporal_r=val_r,val_temporal_valid=val_valid))
+                if model.hrf_prior!='none':
+                    mu,sigma=model.hrf_parameters()
+                    for h in range(4):
+                        log[-1][f'hrf_mu_{h}']=float(mu[h].detach())
+                        log[-1][f'hrf_sigma_{h}']=float(sigma[h].detach())
                 print(log[-1],flush=True)
                 pd.DataFrame(log).to_csv(out/'training.csv',index=False)
                 score=val if a.selection=='mse' else val_r
@@ -211,7 +221,7 @@ def main(argv=None):
     # 评测阶段：神经网络加载验证所选主指标最佳的检查点，不在测试集重新训练。
     if a.model=='ridge': reg=joblib.load(out/'ridge.joblib')
     if a.model in ('mlp','tcn','tcn_attention'):
-        model=Predictor(config['rois'],config['frames'],len(bands),kind=a.model,tr=config.get('tr',2.1),label_trs=config.get('label_trs',4)).to(a.device)
+        model=Predictor(config['rois'],config['frames'],len(bands),kind=a.model,tr=config.get('tr',2.1),label_trs=config.get('label_trs',4),hrf_prior=a.hrf_prior,hrf_strength=a.hrf_strength).to(a.device)
         model.load_state_dict(torch.load(out/'best.pt',map_location=a.device,weights_only=True)); model.eval()
     evaluation=new_evaluation(run,a.eval_split)
     checkpoint=out/({'ridge':'ridge.joblib','mlp':'best.pt','tcn':'best.pt','tcn_attention':'best.pt'}.get(a.model,'state.npz'))
@@ -230,6 +240,21 @@ def main(argv=None):
         else:
             with torch.no_grad():
                 pred=np.concatenate([model(torch.from_numpy(xn[i:i+a.batch_size]).to(a.device)).cpu().numpy() for i in range(0,len(xn),a.batch_size)])
+        if a.model=='tcn_attention':
+            # 固定扫描保存逐窗口、逐头内容注意力及实际权重，分批避免显存占用。
+            if r['scan']=='sub07-scan01':
+                actual=[]; content=[]
+                prior_mode=model.hrf_prior
+                with torch.no_grad():
+                    for i in range(0,len(xn),a.batch_size):
+                        bx=torch.from_numpy(xn[i:i+a.batch_size]).to(a.device)
+                        model(bx); actual.append(model.last_attention.cpu().numpy())
+                        model.hrf_prior='none'
+                        model(bx); content.append(model.last_attention.cpu().numpy())
+                        model.hrf_prior=prior_mode
+                params=model.hrf_parameters()
+                extra={} if params is None else dict(mu=params[0].detach().cpu().numpy(),sigma=params[1].detach().cpu().numpy())
+                np.savez_compressed(evaluation/'attention_sub07-scan01.npz',actual=np.concatenate(actual),content=np.concatenate(content),**extra)
         np.savez_compressed(evaluation/f'{a.eval_split}_{r["scan"]}_predictions.npz',prediction=pred,target=y)
         # 六频段各自计算指标；保留扫描和被试身份供分层汇总。
         for f,band in enumerate(bands):
