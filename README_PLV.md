@@ -116,3 +116,9 @@ python experiment_ledger.py --runs runs --output reports/experiments.html
 运行状态在启动时写入 running、成功后改为 completed；异常或中断留下 running，不能当成已完成实验。台账扫描 evaluations/ 中的评测记录，未完成记录不展示有效分数；只有训练尚未开始评测的目录可直接查看 training/run.json。当前仍仅保存最佳模型参数，不支持恢复 optimizer 状态续训。权重、预测和本地台账位于 Git 忽略的 runs/，需另行备份。
 
 首轮固定 baseline：运行 run_baselines.py（单种子 2026，神经网络 50 epoch，全部验证选模后统一测试）；summarize_baselines.py 导出最新评测汇总到 runs/baseline_summary_20261110。HTML 默认仅显示每实验每划分的最新评测，可取消勾选查看历史。首轮结果使用 float64 Pearson 中心化修正，旧评测仅作历史记录。
+
+## 样本顺序消融
+
+`--sampling global_random` 保留原始全局窗口随机方式（默认）。新增 `scan_random` 和 `scan_sequential`，均按 manifest 的训练扫描与实际 frame_index 分段，不跨扫描或时间缺口，每个样本每轮恰好一次，不循环填充末批。两组均打乱块顺序；前者在各连续区段内随机排列窗口，后者保持块内连续顺序。两组有相同的 batch 大小分布和 162 次更新/epoch；原始全局随机为 159 次，因此原始结果只是辅助参照。使用独立采样 RNG，不改变模型初始化 RNG。
+
+运行 `python run_sampling_ablation.py` 对 MLP/TCN 各训练两种方式（seed=2026、50 epoch、batch=64、lr=3e-4、纯 MSE），全部验证选模后再测试。`python summarize_sampling.py` 导出到 runs/sampling_comparison_20261110，包含原始参照、验证选模记录和 seq-random 的被试配对差及 10000 次 bootstrap CI。相关的配对差是在 r 尺度上按被试算术平均，不等同于 HTML 总体 Fisher 均值之差；不作多重比较校正或显著性声明。单训练 seed 结论需多 seed 复验。所有新训练结果均使用独立目录，保留原始基线。
