@@ -111,6 +111,8 @@ python experiment_ledger.py --runs runs
 python experiment_ledger.py --runs runs --output reports/experiments.html
 ```
 
-用浏览器打开 HTML 即可离线查看，无需服务器或第三方服务。支持实验名/模型/备注筛选、val/test 切换、频段与指标选择、按指标自动排序、横向条形图、被试 CI 与有效比例、数据/代码版本、完整配置展开及当前表格 CSV 导出。改动实验后需重新生成并刷新浏览器。不同数据清单会提示；即使校验一致，也需人工确认实验目的与统计方案可比较。相同 seed 的重复评测不会当作独立随机种子合并；每份评测单独展示。
+用浏览器打开 HTML 即可离线查看，无需服务器或第三方服务。支持实验名/模型/备注筛选、val/test 切换（默认 test）、频段与指标选择、按指标自动排序、横向条形图、被试 CI 与有效比例、数据/代码版本、完整配置展开及当前表格 CSV 导出。改动实验后需重新生成并刷新浏览器。不同数据清单会提示；即使校验一致，也需人工确认实验目的与统计方案可比较。相同 seed 的重复评测不会当作独立随机种子合并；每份评测单独展示。
 
 运行状态在启动时写入 running、成功后改为 completed；异常或中断留下 running，不能当成已完成实验。台账扫描 evaluations/ 中的评测记录，未完成记录不展示有效分数；只有训练尚未开始评测的目录可直接查看 training/run.json。当前仍仅保存最佳模型参数，不支持恢复 optimizer 状态续训。权重、预测和本地台账位于 Git 忽略的 runs/，需另行备份。
+
+首轮固定 baseline：运行 run_baselines.py（单种子 2026，神经网络 50 epoch，全部验证选模后统一测试）；summarize_baselines.py 导出最新评测汇总到 runs/baseline_summary_20261110。HTML 默认仅显示每实验每划分的最新评测，可取消勾选查看历史。首轮结果使用 float64 Pearson 中心化修正，旧评测仅作历史记录。

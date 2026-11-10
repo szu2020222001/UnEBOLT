@@ -23,7 +23,7 @@ for model in ('template','ridge','mlp','tcn'):
                              best_val_window_mse=best.val_mse,final_train_mse=df.iloc[-1].train_mse,
                              final_val_mse=df.iloc[-1].val_mse))
 out=root/'runs'/'baseline_summary_20261110';out.mkdir(exist_ok=True)
-allrows=pd.concat(rows,ignore_index=True)
+allrows=pd.concat(rows,ignore_index=True).sort_values('evaluation').drop_duplicates(['model','split','band','metric'],keep='last')
 allrows.to_csv(out/'all_metrics.csv',index=False)
 pd.DataFrame(training).to_csv(out/'training_selection.csv',index=False)
 test=allrows[allrows.split=='test']
