@@ -13,6 +13,7 @@ from plv_tracking import now, write_json, save_provenance, training_dir, new_eva
 from experiment_ledger import generate
 from models.plv_model import Predictor
 from plv_sampling import ScanBatchSampler
+from plv_losses import objective
 from plv_metrics import metrics, fisher_mean
 
 
@@ -65,12 +66,17 @@ def main(argv=None):
     p.add_argument('--batch-size',type=int,default=64)
     p.add_argument('--lr',type=float,default=3e-4)
     p.add_argument('--sampling',choices=['global_random','scan_random','scan_sequential'],default='global_random')
+    p.add_argument('--loss',choices=['mse','temporal','delta'],default='mse')
+    p.add_argument('--aux-weight',type=float,default=.01)
     p.add_argument('--seed',type=int,default=2026)
     p.add_argument('--device',default='cuda')
     p.add_argument('--eval-only',action='store_true')
     p.add_argument('--notes',default='',help='Purpose/change being tested; saved in the experiment ledger')
     p.add_argument('--eval-split',choices=['val','test'],default='val')
     a=p.parse_args(argv)
+    if a.aux_weight<0: p.error('--aux-weight must be nonnegative')
+    if not a.eval_only and a.loss!='mse' and (a.sampling!='scan_sequential' or a.model not in ('mlp','tcn')):
+        p.error('Sequence losses require neural model and --sampling scan_sequential')
     random.seed(a.seed); np.random.seed(a.seed); torch.manual_seed(a.seed)
     if torch.cuda.is_available(): torch.cuda.manual_seed_all(a.seed)
     torch.backends.cudnn.benchmark=False
@@ -150,19 +156,20 @@ def main(argv=None):
             best=float('inf'); log=[]
             for epoch in range(a.epochs):
                 if scan_sampler is not None: scan_sampler.set_epoch(epoch)
-                model.train(); total=0
+                model.train(); total=0; mse_total=0; aux_total=0
                 for x,y in loader:
                     x,y=x.to(a.device),y.to(a.device); optimizer.zero_grad(set_to_none=True)
-                    loss=(model(x)-y).square().mean(); loss.backward()
+                    loss,batch_mse,aux=objective(model(x),y,a.loss,a.aux_weight); loss.backward()
                     torch.nn.utils.clip_grad_norm_(model.parameters(),1.); optimizer.step()
                     total+=loss.item()*len(x)
+                    mse_total+=batch_mse.item()*len(x); aux_total+=aux.item()*len(x)
                 model.eval(); val_sum=0
                 with torch.no_grad():
                     for i in range(0,len(xv),a.batch_size):
                         prediction=model(torch.from_numpy(xv[i:i+a.batch_size]).to(a.device)).cpu().numpy()
                         val_sum+=float(((prediction-yv[i:i+a.batch_size])**2).sum())
                 val=val_sum/yv.size
-                log.append(dict(epoch=epoch,train_mse=total/len(xt),val_mse=val))
+                log.append(dict(epoch=epoch,train_mse=mse_total/len(xt),train_loss=total/len(xt),train_aux=aux_total/len(xt),val_mse=val))
                 print(log[-1],flush=True)
                 pd.DataFrame(log).to_csv(out/'training.csv',index=False)
                 if val<best:
