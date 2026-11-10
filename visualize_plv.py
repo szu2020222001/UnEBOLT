@@ -127,10 +127,15 @@ def generate(run,data,scan='sub07-scan01'):
     with np.load(data/row['file']) as d:
         y=d['y'];frame=d['frame_index'];start=d['eeg_start'];end=d['eeg_end']
     with np.load(evaluation/f'test_{scan}_predictions.npz') as d:
-        pred=d['prediction'];np.testing.assert_array_equal(y,d['target'])
+        pred=d['prediction']
+        trained=json.loads((training_dir(run)/'run.json').read_text())
+        source_bands=list(manifest['config']['bands'])
+        bands=trained.get('bands') or source_bands
+        y=y[:,[source_bands.index(b) for b in bands]]
+        np.testing.assert_array_equal(y,d['target'])
     if pred.shape!=y.shape or not np.isfinite(pred).all():raise ValueError('Invalid predictions')
     with np.load(training_dir(run)/'state.npz') as d:template=d['template']
-    channels=manifest['config']['channels'];bands=list(manifest['config']['bands'])
+    channels=manifest['config']['channels']
     info,xy=sensors(channels)
     out=evaluation/'visualizations'/f'{scan}_{uuid4().hex[:8]}';out.mkdir(parents=True)
     selected=[int(round(q*(len(y)-1))) for q in (.25,.5,.75)]

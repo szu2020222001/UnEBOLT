@@ -2,9 +2,14 @@
 import torch
 
 
-def objective(pred, target, kind='mse', weight=.01):
+def objective(pred, target, kind='mse', weight=.01, delta_weight=1.):
     mse=(pred-target).square().mean()
     auxiliary=pred.sum()*0
+    if kind=='combined':
+        _,_,temporal=objective(pred,target,'temporal',weight)
+        _,_,delta=objective(pred,target,'delta',delta_weight)
+        auxiliary=weight*temporal+delta_weight*delta
+        return mse+auxiliary,mse,auxiliary
     if kind=='temporal':
         if len(pred)>1:
             # 以 batch 为时间轴；逐频段/边中心化。稳定分母允许常量预测获得梯度。

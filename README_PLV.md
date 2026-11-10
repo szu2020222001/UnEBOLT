@@ -135,3 +135,9 @@ python experiment_ledger.py --runs runs --output reports/experiments.html
 仅对神经网络及 `--sampling scan_sequential` 开放辅助损失。`--loss temporal --aux-weight 0.01` 使用 MSE+0.01*(1-r)，r 在连续 batch 的窗口维中心化后逐频段/边计算再平均；目标方差 <=1e-10 的边不参与相关项，分母方差加 1e-8 稳定梯度。该训练近似与评估 Pearson 的 NaN/Fisher 汇总规则不同。`--loss delta --aux-weight 1.0` 使用 MSE+平均[(预测相邻差)-(真实相邻差)]²，比较 1TR 步长的差分，不除以 TR；无跨 batch 差分。少于两窗口时辅助项为可微零。纯 MSE 为默认值。
 
 运行 `python run_loss_ablation.py` 分别对 MLP/TCN 加入两项损失，seed=2026、50 epoch、batch=64、lr=3e-4，沿用 162 更新/epoch 的扫描连续采样。两种权重在测试前固定，不作权重搜索；检查点仍按验证窗口平均 MSE 选择，因此不是最大化时间相关的检查点。training.csv 分别保存 train_loss、train_mse、train_aux，验证记录 val_mse。`python summarize_losses.py` 汇总与已有连续分块纯 MSE 对照及被试配对差，输出 runs/loss_comparison_20261110。单 seed、5 测试被试，配对 CI 未做多重比较校正；相邻标签重叠 75%，差分目标幅度较小。已有测试集已查看，本轮属探索性迭代。
+
+## Broadband 重启实验（A/B）
+
+本轮清理 runs 中旧实验，保留原始数据和六频段缓存。用 `--bands broadband` 只训练一个输出头，预测数组为 [N,1,325]。A=`tcn`（原 flatten TCN），B=`tcn_attention`（64维正弦相对秒数位置编码 + 同样 TCN + LayerNorm + 4头学习 query 注意力读取 + 64→128 隐藏层）。时间相对 EEG 标签中心定义为 (l-label_trs/2)*TR，默认 -4.2 到 14.7 秒；注意力不是生理延迟或因果解释。B 与 A 参数量并不完全匹配，且 B 同时改变位置编码和读取方式，需后续分解消融。
+
+运行 `python run_broadband_ab.py`，对 A/B 分别比较 mse、temporal（MSE+0.01时间相关损失）、delta（MSE+1.0差分损失）、combined（MSE+0.01时间相关损失+1.0差分损失），seed=2026、50 epoch、lr=3e-4、batch=64、扫描内连续采样。`--selection temporal_r` 每 epoch 在完整验证扫描内计算相关，再扫描到被试 Fisher 汇总，选择最高分，严格相等时保留较早 epoch。记录 val_temporal_r 与 val_temporal_valid；NaN 不选为最佳。保留 MSE 指标以监测尺度失真。全部八组完成验证选模后统一测试，不根据测试结果调整配置。旧脚本仍作代码历史参考，其硬编码的旧实验路径不再有产物。

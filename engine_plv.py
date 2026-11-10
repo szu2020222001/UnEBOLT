@@ -14,7 +14,7 @@ from experiment_ledger import generate
 from models.plv_model import Predictor
 from plv_sampling import ScanBatchSampler
 from plv_losses import objective
-from plv_metrics import metrics, fisher_mean
+from plv_metrics import metrics, fisher_mean, corr_rows
 
 
 def read_scan(root, row):
@@ -61,12 +61,15 @@ def main(argv=None):
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--data',required=True)
     p.add_argument('--output',required=True)
-    p.add_argument('--model',choices=['template','ridge','mlp','tcn'],default='tcn')
+    p.add_argument('--model',choices=['template','ridge','mlp','tcn','tcn_attention'],default='tcn')
     p.add_argument('--epochs',type=int,default=50)
     p.add_argument('--batch-size',type=int,default=64)
     p.add_argument('--lr',type=float,default=3e-4)
     p.add_argument('--sampling',choices=['global_random','scan_random','scan_sequential'],default='global_random')
-    p.add_argument('--loss',choices=['mse','temporal','delta'],default='mse')
+    p.add_argument('--loss',choices=['mse','temporal','delta','combined'],default='mse')
+    p.add_argument('--bands',nargs='+',default=None,help='Select label bands, e.g. broadband')
+    p.add_argument('--selection',choices=['mse','temporal_r'],default='mse')
+    p.add_argument('--delta-weight',type=float,default=1.)
     p.add_argument('--aux-weight',type=float,default=.01)
     p.add_argument('--seed',type=int,default=2026)
     p.add_argument('--device',default='cuda')
@@ -74,8 +77,8 @@ def main(argv=None):
     p.add_argument('--notes',default='',help='Purpose/change being tested; saved in the experiment ledger')
     p.add_argument('--eval-split',choices=['val','test'],default='val')
     a=p.parse_args(argv)
-    if a.aux_weight<0: p.error('--aux-weight must be nonnegative')
-    if not a.eval_only and a.loss!='mse' and (a.sampling!='scan_sequential' or a.model not in ('mlp','tcn')):
+    if a.aux_weight<0 or a.delta_weight<0: p.error('--aux-weight must be nonnegative')
+    if not a.eval_only and a.loss!='mse' and (a.sampling!='scan_sequential' or a.model not in ('mlp','tcn','tcn_attention')):
         p.error('Sequence losses require neural model and --sampling scan_sequential')
     random.seed(a.seed); np.random.seed(a.seed); torch.manual_seed(a.seed)
     if torch.cuda.is_available(): torch.cuda.manual_seed_all(a.seed)
@@ -88,12 +91,25 @@ def main(argv=None):
             raise ValueError('Run directory is not empty; use a new output directory')
         out.mkdir()
     manifest=json.loads((root/'manifest.json').read_text())
-    config=manifest['config']; bands=list(config['bands'])
+    config=manifest['config']; all_bands=list(config['bands'])
+    if a.eval_only:
+        saved_config=json.loads((out/'run.json').read_text())
+        if a.bands is not None and a.bands!=saved_config.get('bands',all_bands):
+            raise ValueError('Requested bands differ from trained bands')
+        a.bands=saved_config.get('bands',all_bands)
+    bands=a.bands or all_bands
+    if not bands or len(set(bands))!=len(bands) or any(b not in all_bands for b in bands):
+        raise ValueError('Invalid bands')
+    a.bands=bands
+    band_indices=[all_bands.index(b) for b in bands]
+    def load_scan(row):
+        x,y=read_scan(root,row)
+        return x,y[:,band_indices]
     identity=data_identity(root,manifest)
     by={s:[r for r in manifest['scans'] if r['split']==s] for s in ('train','val','test')}
     if not all(by.values()): raise ValueError('A complete train/val/test manifest is required')
     def concat(part):
-        pairs=[read_scan(root,r) for r in by[part]]
+        pairs=[load_scan(r) for r in by[part]]
         return tuple(np.concatenate([z[i] for z in pairs]) for i in (0,1))
     model=None; reg=None
     statepath=out/'state.npz'
@@ -115,7 +131,7 @@ def main(argv=None):
                 idx=(d['frame_index'][:,None]+np.arange(config['frames'])).ravel()
                 _,first=np.unique(idx,return_index=True)
                 frames.append(d['x'].reshape(-1,config['rois'])[first])
-                scan_templates.append((r['subject'],d['y'].mean(0)))
+                scan_templates.append((r['subject'],d['y'][:,band_indices].mean(0)))
         allframes=np.concatenate(frames)
         mean=allframes.mean(0); std=allframes.std(0).clip(1e-6)
         us=sorted(set(u for u,_ in scan_templates))
@@ -135,8 +151,8 @@ def main(argv=None):
                 score=float(np.mean((pred-yv)**2)); scores.append(dict(alpha=alpha,val_mse=score))
                 if score<best: best,reg=score,candidate
             joblib.dump(reg,out/'ridge.joblib'); pd.DataFrame(scores).to_csv(out/'ridge_search.csv',index=False)
-        elif a.model in ('mlp','tcn'):
-            model=Predictor(config['rois'],config['frames'],len(bands),kind=a.model).to(a.device)
+        elif a.model in ('mlp','tcn','tcn_attention'):
+            model=Predictor(config['rois'],config['frames'],len(bands),kind=a.model,tr=config.get('tr',2.1),label_trs=config.get('label_trs',4)).to(a.device)
             optimizer=torch.optim.AdamW(model.parameters(),lr=a.lr,weight_decay=.01)
             dataset=TensorDataset(torch.from_numpy(xt),torch.from_numpy(yt))
             scan_sampler=None
@@ -153,37 +169,52 @@ def main(argv=None):
             record['batches_per_epoch']=len(loader)
             record['samples_per_epoch']=len(dataset)
             write_json(out/'run.json',record)
-            best=float('inf'); log=[]
+            best=float('inf') if a.selection=='mse' else -float('inf'); log=[]
             for epoch in range(a.epochs):
                 if scan_sampler is not None: scan_sampler.set_epoch(epoch)
-                model.train(); total=0; mse_total=0; aux_total=0
+                model.train(); total=0; mse_total=0; aux_total=0; delta_total=0
                 for x,y in loader:
                     x,y=x.to(a.device),y.to(a.device); optimizer.zero_grad(set_to_none=True)
-                    loss,batch_mse,aux=objective(model(x),y,a.loss,a.aux_weight); loss.backward()
+                    loss,batch_mse,aux=objective(model(x),y,a.loss,a.aux_weight,a.delta_weight); loss.backward()
                     torch.nn.utils.clip_grad_norm_(model.parameters(),1.); optimizer.step()
                     total+=loss.item()*len(x)
                     mse_total+=batch_mse.item()*len(x); aux_total+=aux.item()*len(x)
-                model.eval(); val_sum=0
+                model.eval(); val_sum=0; val_predictions=[]
                 with torch.no_grad():
                     for i in range(0,len(xv),a.batch_size):
                         prediction=model(torch.from_numpy(xv[i:i+a.batch_size]).to(a.device)).cpu().numpy()
+                        val_predictions.append(prediction)
                         val_sum+=float(((prediction-yv[i:i+a.batch_size])**2).sum())
                 val=val_sum/yv.size
-                log.append(dict(epoch=epoch,train_mse=mse_total/len(xt),train_loss=total/len(xt),train_aux=aux_total/len(xt),val_mse=val))
+                # 按完整扫描计算时间相关，再扫描→被试→总体 Fisher 平均；不拼接扫描。
+                vp=np.concatenate(val_predictions); cursor=0; subject_r={}; subject_valid={}
+                for row in by['val']:
+                    n=row['windows'] if 'windows' in row else len(load_scan(row)[0])
+                    correlations=corr_rows(yv[cursor:cursor+n].transpose(1,2,0),vp[cursor:cursor+n].transpose(1,2,0))
+                    subject_r.setdefault(row['subject'],[]).append(fisher_mean(correlations))
+                    subject_valid.setdefault(row['subject'],[]).append(float(np.isfinite(correlations).mean()))
+                    cursor+=n
+                val_r=fisher_mean([fisher_mean(values) for values in subject_r.values()])
+                val_valid=float(np.mean([np.mean(values) for values in subject_valid.values()]))
+                log.append(dict(epoch=epoch,train_mse=mse_total/len(xt),train_loss=total/len(xt),train_aux=aux_total/len(xt),val_mse=val,val_temporal_r=val_r,val_temporal_valid=val_valid))
                 print(log[-1],flush=True)
                 pd.DataFrame(log).to_csv(out/'training.csv',index=False)
-                if val<best:
-                    best=val; torch.save(model.state_dict(),out/'best.pt')
+                score=val if a.selection=='mse' else val_r
+                improved=score<best if a.selection=='mse' else np.isfinite(score) and score>best
+                if improved:
+                    best=score; torch.save(model.state_dict(),out/'best.pt')
+                    record.update(best_epoch=epoch+1,best_selection_score=float(score),parameter_count=sum(p.numel() for p in model.parameters()))
+                    write_json(out/'run.json',record)
     if not a.eval_only:
         record.update(status='completed',finished_at=now())
         write_json(out/'run.json',record)
-    # 评测阶段：神经网络加载验证 MSE 最佳的检查点，不在测试集重新训练。
+    # 评测阶段：神经网络加载验证所选主指标最佳的检查点，不在测试集重新训练。
     if a.model=='ridge': reg=joblib.load(out/'ridge.joblib')
-    if a.model in ('mlp','tcn'):
-        model=Predictor(config['rois'],config['frames'],len(bands),kind=a.model).to(a.device)
+    if a.model in ('mlp','tcn','tcn_attention'):
+        model=Predictor(config['rois'],config['frames'],len(bands),kind=a.model,tr=config.get('tr',2.1),label_trs=config.get('label_trs',4)).to(a.device)
         model.load_state_dict(torch.load(out/'best.pt',map_location=a.device,weights_only=True)); model.eval()
     evaluation=new_evaluation(run,a.eval_split)
-    checkpoint=out/({'ridge':'ridge.joblib','mlp':'best.pt','tcn':'best.pt'}.get(a.model,'state.npz'))
+    checkpoint=out/({'ridge':'ridge.joblib','mlp':'best.pt','tcn':'best.pt','tcn_attention':'best.pt'}.get(a.model,'state.npz'))
     eval_record=dict(split=a.eval_split,model=a.model,status='running',started_at=now(),
                      data_identity=identity,checkpoint_sha256=sha256(checkpoint),
                      checkpoint=str(checkpoint.resolve()),provenance=save_provenance(evaluation),
@@ -193,7 +224,7 @@ def main(argv=None):
     # 按完整扫描预测，避免跨扫描拼接计算时间相关。
     for r in by[a.eval_split]:
         # 仅应用训练集保存的逐 ROI 标准化参数。
-        x,y=read_scan(root,r); xn=((x-mean)/std).astype('float32')
+        x,y=load_scan(r); xn=((x-mean)/std).astype('float32')
         if a.model=='template': pred=np.broadcast_to(template,y.shape).copy()
         elif a.model=='ridge': pred=np.clip(reg.predict(xn.reshape(len(xn),-1)),0,1).reshape(y.shape)
         else:
