@@ -141,3 +141,9 @@ python experiment_ledger.py --runs runs --output reports/experiments.html
 本轮清理 runs 中旧实验，保留原始数据和六频段缓存。用 `--bands broadband` 只训练一个输出头，预测数组为 [N,1,325]。A=`tcn`（原 flatten TCN），B=`tcn_attention`（64维正弦相对秒数位置编码 + 同样 TCN + LayerNorm + 4头学习 query 注意力读取 + 64→128 隐藏层）。时间相对 EEG 标签中心定义为 (l-label_trs/2)*TR，默认 -4.2 到 14.7 秒；注意力不是生理延迟或因果解释。B 与 A 参数量并不完全匹配，且 B 同时改变位置编码和读取方式，需后续分解消融。
 
 运行 `python run_broadband_ab.py`，对 A/B 分别比较 mse、temporal（MSE+0.01时间相关损失）、delta（MSE+1.0差分损失）、combined（MSE+0.01时间相关损失+1.0差分损失），seed=2026、50 epoch、lr=3e-4、batch=64、扫描内连续采样。`--selection temporal_r` 每 epoch 在完整验证扫描内计算相关，再扫描到被试 Fisher 汇总，选择最高分，严格相等时保留较早 epoch。记录 val_temporal_r 与 val_temporal_valid；NaN 不选为最佳。保留 MSE 指标以监测尺度失真。全部八组完成验证选模后统一测试，不根据测试结果调整配置。旧脚本仍作代码历史参考，其硬编码的旧实验路径不再有产物。
+
+## HRF 启发高斯软先验（三 seed）
+
+`--hrf-prior none/fixed/learnable`，只用于 tcn_attention。保留正弦编码，在每头 QK/sqrt(d) 的 softmax 前加 `-strength*(relative_seconds-mu)^2/(2*sigma^2)`。strength固定0.1，mu初始4/5/6/7秒，sigma初始3.5秒；可学习版 mu=12*sigmoid(raw_mu)，sigma=1+softplus(raw_sigma)，增加8参数。此先验是读取TCN混合特征的偏置，不是完整HRF或个体延迟测量。
+
+`python run_hrf_ablation.py` 对三个模式分别跑2026/2027/2028，50epoch、组合损失、扫描连续采样、验证被试等权时间相关选模，九组验证全部完成后测试。使用相同seed时基础网络参数初始化一致。每epoch记录mu/sigma，固定测试扫描sub07-scan01另存逐窗口逐头 actual/content 注意力；后者是同一模型移除偏置的诊断，并非无先验重训基线。`python summarize_hrf.py` 导出到 runs/hrf_comparison，含三seed均值/样本标准差、最佳参数、参数轨迹与注意力图；按被试先平均seed后配对bootstrap，未多重校正，不把15个subject-seed视为独立样本。旧实验保留，本轮结果仅本地保存。
