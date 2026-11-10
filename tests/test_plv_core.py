@@ -11,7 +11,7 @@ def test_phase_locking():
 
 
 def test_metrics_identity_and_constant():
-    y=np.random.default_rng(1).uniform(size=(30,325))
+    y=np.random.default_rng(1).uniform(size=(562,325)).astype("float32")
     m=metrics(y,y,y.mean(0))
     assert m['mse']==0 and m['f1_0.25']==1 and m['temporal_r']>.999
     c=metrics(y,np.broadcast_to(y.mean(0),y.shape),y.mean(0))

@@ -11,6 +11,8 @@ def corr_rows(a, b, eps=1e-8):
     eps 是两向量中心化后范数乘积的阈值，不是逐向量方差阈值。
     分母太小时返回 NaN；不通过给分母加常数将无定义相关变成零。
     """
+    # 使用 float64 中心化，避免 float32 常量序列的均值舍入产生虚假方差。
+    a, b = np.asarray(a, dtype=np.float64), np.asarray(b, dtype=np.float64)
     # 中心化后，内积除以范数乘积就是 Pearson 相关系数。
     a, b = a-a.mean(-1, keepdims=True), b-b.mean(-1, keepdims=True)
     den = np.linalg.norm(a, axis=-1)*np.linalg.norm(b, axis=-1)
