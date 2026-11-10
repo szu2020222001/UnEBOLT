@@ -1,0 +1,60 @@
+<div class="panel"><h2>模型结构与损失函数</h2>
+<p>对应本轮 broadband 单任务实现。B 为 batch 窗口数，L=10 为每窗口 BOLD 帧数，P=64 为 ROI 数，E=325 为电极对数。两个模型均输出 [B,1,325]；batch 内是同一扫描的连续窗口。</p>
+<div class="architecture-grid">
+<section><h3>A · TCN</h3><pre class="mermaid">
+flowchart TD
+  A["标准化 BOLD<br/>B × 10 × 64"] --> B["逐帧 Linear 64→64 + GELU<br/>B × 10 × 64"]
+  B --> C["Transpose<br/>B × 64 × 10"]
+  C --> D["残差时间卷积 ×3<br/>dilation = 1, 2, 4<br/>B × 64 × 10"]
+  D --> E["Transpose + Flatten<br/>B × 640"]
+  E --> F["Linear 640→128<br/>GELU + Dropout 0.1"]
+  F --> G["Linear 128→325 + Sigmoid"]
+  G --> H["broadband PLV 上三角<br/>B × 1 × 325"]
+</pre></section>
+<section><h3>B · TCN Attention</h3><pre class="mermaid">
+flowchart TD
+  A["标准化 BOLD<br/>B × 10 × 64"] --> B["逐帧 Linear 64→64 + GELU"]
+  T["相对时间 Δt = (l−2) × 2.1 秒<br/>−4.2 … 14.7 秒<br/>固定正弦位置编码 10 × 64"] --> ADD["逐元素相加<br/>B × 10 × 64"]
+  B --> ADD
+  ADD --> C["Transpose + 残差时间卷积 ×3<br/>dilation = 1, 2, 4"]
+  C --> D["Transpose + LayerNorm 64<br/>B × 10 × 64"]
+  D --> KV["Key / Value"]
+  Q["可学习任务 Query<br/>扩展为 B × 1 × 64"] --> AT["4头交叉注意力读取<br/>dropout = 0"]
+  KV --> AT
+  AT --> E["Flatten<br/>B × 64"]
+  E --> F["Linear 64→128<br/>GELU + Dropout 0.1"]
+  F --> G["Linear 128→325 + Sigmoid"]
+  G --> H["broadband PLV 上三角<br/>B × 1 × 325"]
+</pre></section></div>
+<details><summary>共享残差卷积块细节</summary><pre class="mermaid">
+flowchart LR
+  X["输入 X<br/>B × 64 × 10"] --> C["Conv1d 64→64<br/>kernel=3, padding=d, dilation=d"]
+  C --> G["GELU"] --> D["Dropout 0.1"] --> S["相加"]
+  X --> S
+  S --> Y["输出 X + 分支<br/>B × 64 × 10"]
+</pre><p>三个块的 d 分别为 1、2、4；对称 padding，非因果卷积。B 的注意力读取的是经过 TCN 混合后的时间特征，其权重不能直接当作生理 HRF 延迟。A/B 参数量与读取方式不同，本轮不是位置编码的单因素消融。</p></details>
+<p id="mermaid-status">结构图加载中；如浏览器禁止脚本，图区域中的 Mermaid 源码仍可阅读。</p>
+<h3>三种基础损失的计算</h3>
+<p>以下省略唯一的频段轴。y<sub>n,e</sub> 为第 n 个连续 EEG 标签窗口、第 e 条连接的真实 PLV，ŷ<sub>n,e</sub> 为预测；n=1,…,B，e=1,…,E。所有求和只使用非对角上三角连接。</p>
+<h4>① 数值误差 L<sub>MSE</sub></h4>
+<div class="formula">L<sub>MSE</sub> = (1 / BE) ∑<sub>n=1…B</sub> ∑<sub>e=1…E</sub> (ŷ<sub>n,e</sub> − y<sub>n,e</sub>)²</div>
+<p>对窗口和连接等权，约束 PLV 绝对数值。</p>
+<h4>② 时间相关损失 L<sub>corr</sub></h4>
+<div class="formula">a<sub>n,e</sub> = ŷ<sub>n,e</sub> − mean<sub>n</sub>(ŷ<sub>n,e</sub>)，　b<sub>n,e</sub> = y<sub>n,e</sub> − mean<sub>n</sub>(y<sub>n,e</sub>)<br/>
+v̂<sub>e</sub> = mean<sub>n</sub>(a<sub>n,e</sub>²)，　v<sub>e</sub> = mean<sub>n</sub>(b<sub>n,e</sub>²)<br/>
+r̃<sub>e</sub> = mean<sub>n</sub>(a<sub>n,e</sub>b<sub>n,e</sub>) / √[(v̂<sub>e</sub> + ε)(v<sub>e</sub> + ε)]<br/>
+V = {e : v<sub>e</sub> &gt; 10⁻¹⁰}，　ε = 10⁻⁸<br/>
+L<sub>corr</sub> = 1 − (1 / |V|) ∑<sub>e∈V</sub> r̃<sub>e</sub></div>
+<p>沿连续 batch 的窗口维计算，每条有效连接等权。目标方差过小的连接不参与；预测方差小不直接剔除，以稳定分母保留梯度。没有有效连接或 B&lt;2 时该项为可微零。训练用的是稳定化相关的算术平均，不是评估时的完整扫描 Pearson 和 Fisher-z 汇总。</p>
+<h4>③ 相邻变化损失 L<sub>Δ</sub></h4>
+<div class="formula">Δŷ<sub>n,e</sub> = ŷ<sub>n+1,e</sub> − ŷ<sub>n,e</sub>，　Δy<sub>n,e</sub> = y<sub>n+1,e</sub> − y<sub>n,e</sub><br/>
+L<sub>Δ</sub> = [1 / ((B−1)E)] ∑<sub>n=1…B−1</sub> ∑<sub>e=1…E</sub> (Δŷ<sub>n,e</sub> − Δy<sub>n,e</sub>)²</div>
+<p>约束相邻窗口变化的方向和幅度。步长为 1TR=2.1 秒，未除以 TR，因此是差分而非时间导数。不跨 batch、扫描或缺口计算；B&lt;2 时为可微零。标签窗口重叠约 75%。</p>
+<h3>本轮四种训练目标</h3>
+<table><thead><tr><th>实验标识</th><th>总损失</th></tr></thead><tbody>
+<tr><td>mse</td><td>L = L<sub>MSE</sub></td></tr>
+<tr><td>temporal</td><td>L = L<sub>MSE</sub> + 0.01 L<sub>corr</sub></td></tr>
+<tr><td>delta</td><td>L = L<sub>MSE</sub> + 1.0 L<sub>Δ</sub></td></tr>
+<tr><td>combined</td><td>L = L<sub>MSE</sub> + 0.01 L<sub>corr</sub> + 1.0 L<sub>Δ</sub></td></tr>
+</tbody></table><p>全部按验证集逐扫描计算、按被试等权 Fisher 汇总后的 temporal_r 最大值选择检查点，不按最低总训练损失选模。四个标识并不包含纯相关或纯差分训练。</p>
+</div>

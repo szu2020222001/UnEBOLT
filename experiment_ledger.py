@@ -3,6 +3,7 @@ import argparse
 import csv
 import json
 import os
+import shutil
 from pathlib import Path
 from plv_tracking import now, training_dir
 
@@ -31,6 +32,15 @@ def generate(root, output=None):
     data = json.dumps(records, ensure_ascii=False, allow_nan=False).replace('<', '\\u003c')
     html = TEMPLATE.replace('__RECORDS__', data).replace('__GENERATED__', now())
     output.parent.mkdir(parents=True, exist_ok=True)
+    assets=Path(__file__).resolve().parent/'assets'
+    methods=(assets/'ledger_methods.html').read_text(encoding='utf-8')
+    html=html.replace('<div class="panel"><h2>运行配置与评测溯源</h2>',methods+'<div class="panel"><h2>运行配置与评测溯源</h2>')
+    dest=output.parent/'assets'
+    dest.mkdir(exist_ok=True)
+    shutil.copyfile(assets/'mermaid-10.9.3.min.js',dest/'mermaid-10.9.3.min.js')
+    html=html.replace('</main></html>', '''<script src="assets/mermaid-10.9.3.min.js"></script><script>
+    if(window.mermaid){mermaid.initialize({startOnLoad:false,securityLevel:'strict',theme:'default',flowchart:{htmlLabels:true,useMaxWidth:true}});mermaid.run({querySelector:'.mermaid'}).then(()=>{document.getElementById('mermaid-status').textContent='结构图已用项目内 Mermaid 10.9.3 离线渲染。'}).catch(()=>{document.getElementById('mermaid-status').textContent='结构图渲染失败，请查看源代码或刷新页面。'});}
+    </script></main></html>''')
     output.write_text(html, encoding='utf-8')
     return output
 
@@ -39,10 +49,10 @@ TEMPLATE = r'''<!doctype html>
 <html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>BOLD → PLV 实验台账</title>
 <style>
-body{font:15px system-ui,sans-serif;background:#f3f6fa;color:#182a40;margin:0;padding:28px}main{max-width:1500px;margin:auto}h1{margin:0 0 10px}p{color:#53657a;line-height:1.6}.panel{background:white;padding:20px;border:1px solid #dce5f0;border-radius:12px;margin:18px 0}label{display:inline-flex;gap:8px;align-items:center;margin:6px 18px 6px 0}select,input{padding:8px;border:1px solid #b8c9db;border-radius:5px}table{border-collapse:collapse;width:100%;font-size:13px}th,td{text-align:left;padding:11px;border-bottom:1px solid #e5ebf3;vertical-align:top}th{background:#edf3fa;cursor:pointer;white-space:nowrap}small{color:#65758a}button{padding:9px 14px;cursor:pointer}a{color:#205cb6}.scroll{overflow:auto}.barrow{display:grid;grid-template-columns:minmax(180px,35%) 1fr 100px;gap:10px;align-items:center;margin:12px 0}.track{height:18px;background:#eef2f7;position:relative}.bar{height:18px;background:#417add;position:absolute}.missing{color:#aa4a32}details{margin:12px 0}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}.badge{display:inline-block;padding:3px 8px;background:#e8f0fc;border-radius:8px}
+.architecture-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:24px}.architecture-grid section{min-width:0}.mermaid{background:#f8fafc;padding:14px;overflow:auto}.formula{font-family:Cambria,Georgia,serif;font-size:18px;line-height:2;background:#f4f7fc;border-left:4px solid #417add;padding:14px;overflow:auto}body{font:15px system-ui,sans-serif;background:#f3f6fa;color:#182a40;margin:0;padding:28px}main{max-width:1500px;margin:auto}h1{margin:0 0 10px}p{color:#53657a;line-height:1.6}.panel{background:white;padding:20px;border:1px solid #dce5f0;border-radius:12px;margin:18px 0}label{display:inline-flex;gap:8px;align-items:center;margin:6px 18px 6px 0}select,input{padding:8px;border:1px solid #b8c9db;border-radius:5px}table{border-collapse:collapse;width:100%;font-size:13px}th,td{text-align:left;padding:11px;border-bottom:1px solid #e5ebf3;vertical-align:top}th{background:#edf3fa;cursor:pointer;white-space:nowrap}small{color:#65758a}button{padding:9px 14px;cursor:pointer}a{color:#205cb6}.scroll{overflow:auto}.barrow{display:grid;grid-template-columns:minmax(180px,35%) 1fr 100px;gap:10px;align-items:center;margin:12px 0}.track{height:18px;background:#eef2f7;position:relative}.bar{height:18px;background:#417add;position:absolute}.missing{color:#aa4a32}details{margin:12px 0}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}.badge{display:inline-block;padding:3px 8px;background:#e8f0fc;border-radius:8px}
 </style><main>
 <h1>BOLD → EEG PLV 实验台账</h1>
-<p>离线 HTML，无外部服务或网络依赖。生成时间：__GENERATED__。运行训练或评测后自动刷新文件；已打开的页面需要重新加载。</p>
+<p>离线 HTML，无外部服务或网络依赖；分享时请同时保留旁边的 assets 文件夹。生成时间：__GENERATED__。运行训练或评测后自动刷新文件；已打开的页面需要重新加载。</p>
 <div class="panel"><label>筛选 <input id="search" placeholder="实验名 / 模型 / 备注"></label><label>划分 <select id="split"><option>test</option><option>val</option></select></label><label>频段 <select id="band"></select></label><label>排序与图表指标 <select id="metric"></select></label><label><input type="checkbox" id="latest" checked>每实验仅显示最新评测</label><button id="download">导出当前表 CSV</button><p id="count"></p>
 <p>当前仅展示 broadband（0.5–45 Hz），本轮为 broadband 单任务；验证 temporal_r 选模；每行是一份独立评测；默认展示测试集最终对比，可切换验证集查看开发记录。数据清单版本不同的实验只能作探索性比较。相关指标需同时检查有效比例；CI 为被试 bootstrap 区间。</p></div>
 <div class="panel scroll"><table><thead><tr><th>实验 / 评测</th><th>模型 / seed / 采样 / 损失</th><th>训练版本</th><th>数据版本</th><th>MSE ↓</th><th>MAE ↓</th><th>时间相关 ↑</th><th>空间相关 ↑</th><th>F1 top25% ↑</th><th>F1 top50% ↑</th><th>Skill ↑</th><th>时间相关有效比例</th><th>空间相关有效比例</th><th>状态 / 文件</th></tr></thead><tbody id="rows"></tbody></table></div>
