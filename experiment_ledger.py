@@ -22,7 +22,7 @@ def generate(root, output=None):
             scores = []
         else:
             with summary.open(encoding='utf-8', newline='') as stream:
-                scores = list(csv.DictReader(stream))
+                scores = [row for row in csv.DictReader(stream) if row['band']=='broadband']
         records.append(dict(run=str(run.relative_to(root)), evaluation=meta.parent.name,
                             config=config, meta=evaluation, scores=scores,
                             report=os.path.relpath(summary, output.parent).replace(os.sep, '/'),
@@ -44,7 +44,7 @@ body{font:15px system-ui,sans-serif;background:#f3f6fa;color:#182a40;margin:0;pa
 <h1>BOLD → EEG PLV 实验台账</h1>
 <p>离线 HTML，无外部服务或网络依赖。生成时间：__GENERATED__。运行训练或评测后自动刷新文件；已打开的页面需要重新加载。</p>
 <div class="panel"><label>筛选 <input id="search" placeholder="实验名 / 模型 / 备注"></label><label>划分 <select id="split"><option>test</option><option>val</option></select></label><label>频段 <select id="band"></select></label><label>排序与图表指标 <select id="metric"></select></label><label><input type="checkbox" id="latest" checked>每实验仅显示最新评测</label><button id="download">导出当前表 CSV</button><p id="count"></p>
-<p>每行是一份独立评测；默认展示测试集最终对比，可切换验证集查看开发记录。数据清单版本不同的实验只能作探索性比较。相关指标需同时检查有效比例；CI 为被试 bootstrap 区间。</p></div>
+<p>当前仅展示 broadband（0.5–45 Hz），历史模型仍是六频段联合训练；每行是一份独立评测；默认展示测试集最终对比，可切换验证集查看开发记录。数据清单版本不同的实验只能作探索性比较。相关指标需同时检查有效比例；CI 为被试 bootstrap 区间。</p></div>
 <div class="panel scroll"><table><thead><tr><th>实验 / 评测</th><th>模型 / seed / 采样 / 损失</th><th>训练版本</th><th>数据版本</th><th>MSE ↓</th><th>MAE ↓</th><th>时间相关 ↑</th><th>空间相关 ↑</th><th>F1 top25% ↑</th><th>F1 top50% ↑</th><th>Skill ↑</th><th>时间相关有效比例</th><th>空间相关有效比例</th><th>状态 / 文件</th></tr></thead><tbody id="rows"></tbody></table></div>
 <div class="panel"><h2>如何理解表格</h2><p>每个指标单元格依次显示：总体点估计、95% CI、有效被试数 n。总体先汇总扫描到被试，再对被试等权汇总；时间/空间相关采用 Fisher-z 平均。</p><p><strong>95% CI：</strong>对有效被试有放回重采样 1000 次，用汇总分数的 2.5% 和 97.5% 分位数表示抽样不确定性；不是 95% 窗口的分数范围，也不是训练 seed 的波动。当前测试集最多 5 名被试，小样本区间需谨慎解释。</p><p><strong>有效被试数 n：</strong>该指标有有限数值、参与总体汇总的被试数量，不是扫描数或窗口数。NaN 不计入；n 小于 2 时不计算 CI。</p><p><strong>相关有效比例：</strong>时间相关是每扫描可计算 Pearson 的边数 / 325；空间相关是每扫描可计算 Pearson 的窗口数 / 总窗口数，再扫描到被试等权汇总。真实或预测近似常量可导致无定义相关。它不是准确率，100% 不代表预测正确。静态模板时间相关无定义，因此时间有效比例为 0%。</p><p>“—”表示无定义或没有可用统计。区间是否重叠不能代替模型间配对检验。不同训练 seed 的不确定性需要单独多 seed 实验。</p></div>
 <div class="panel"><h2>指标对比</h2><p id="direction"></p><div id="chart"></div><p>条形图以 0 为基准；详细数值、置信区间及有效被试数见上表。</p></div>
@@ -53,9 +53,9 @@ body{font:15px system-ui,sans-serif;background:#f3f6fa;color:#182a40;margin:0;pa
 <script>
 const data=JSON.parse(document.getElementById('data').textContent), $=id=>document.getElementById(id);
 const metrics=['mse','mae','temporal_r','spatial_r','skill','delta_mse','template_mse','f1_0.25','f1_0.5','spatial_valid','temporal_valid'];
-const bands=[...new Set(data.flatMap(r=>r.scores.map(s=>s.band)))];
+const bands=['broadband'];
 function option(el,value){let o=document.createElement('option');o.value=value;o.textContent=value;el.append(o)}
-(bands.length?bands:['delta','theta','alpha','beta','gamma','broadband']).forEach(v=>option($('band'),v));metrics.forEach(v=>option($('metric'),v));
+(bands.length?bands:['broadband']).forEach(v=>option($('band'),v));metrics.forEach(v=>option($('metric'),v));
 function num(v){if(v===undefined||v===null||v==='')return null;const n=Number(v);return Number.isFinite(n)?n:null}
 function fmt(v){const n=num(v);return n===null?'—':n.toFixed(5)}
 function score(r,key){return r.scores.find(s=>s.band===$('band').value&&s.metric===key)}

@@ -152,7 +152,7 @@ def generate(run,data,scan='sub07-scan01'):
     page+='''<p>固定测试案例；各实验共用同一扫描和窗口。每点是 8.4 秒 EEG 窗口的 PLV，步长 2.1 秒；横轴为窗口中心，非瞬时或独立观测。曲线不平滑、不按模型分数选边。此案例不代表测试集总体。</p>
 <p>矩阵屏蔽对角线；头皮连接图各取最强 25% 边，误差图取绝对误差最大的 25%。所有实验 PLV 色标固定 [0,1]、误差固定 [-1,1]。拓扑图每电极数值为其 25 条连接的均值，误差列是有符号均值，可能抵消；不是 EEG 电位或脑源激活图。位置为标准 10-20 montage 示意。</p>
 <label>频段 <select id="band">'''
-    page+=''.join(f'<option {"selected" if b=="alpha" else ""}>{b}</option>' for b in bands)
+    page+=''.join(f'<option {"selected" if b=="alpha" else ""}>{b}</option>' for b in bands if b=='broadband')
     page+='''</select></label><label>固定窗口位置 <select id="window"><option value="25">25%</option><option value="50" selected>50%</option><option value="75">75%</option></select></label>
 <h2>时间变化与逐窗口误差</h2><a id="timeLink"><img id="time" alt="PLV time courses"></a><h2>单窗口：矩阵、头皮连接和电极均值拓扑</h2><a id="snapshotLink"><img id="snapshot" alt="True, predicted and error spatial comparison"></a>
 <p>点击图片打开原图。各模型在实验台账中进入对应页面，可使用相同频段和窗口并排查看。</p>
