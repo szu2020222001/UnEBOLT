@@ -25,7 +25,8 @@ def generate(root, output=None):
                 scores = list(csv.DictReader(stream))
         records.append(dict(run=str(run.relative_to(root)), evaluation=meta.parent.name,
                             config=config, meta=evaluation, scores=scores,
-                            report=os.path.relpath(summary, output.parent).replace(os.sep, '/')))
+                            report=os.path.relpath(summary, output.parent).replace(os.sep, '/'),
+                            visualization=os.path.relpath(meta.parent/evaluation['visualization'], output.parent).replace(os.sep, '/') if evaluation.get('visualization') else None))
     # JSON 中的 '<' 必须转义，防止目录名/备注中的 </script> 提前关闭脚本。
     data = json.dumps(records, ensure_ascii=False, allow_nan=False).replace('<', '\\u003c')
     html = TEMPLATE.replace('__RECORDS__', data).replace('__GENERATED__', now())
@@ -68,7 +69,7 @@ function render(){const list=visible(),key=$('metric').value;$('rows').replaceCh
  $('direction').textContent=(lower()?'数值越低越好。':'数值越高越好。')+(versions.size>1?' 注意：当前含不同数据清单版本。':'');
  const values=list.map(r=>num(score(r,key)?.mean)).filter(v=>v!==null),lo=Math.min(0,...values),hi=Math.max(0,...values),span=hi-lo||1;
  for(const r of list){const s=score(r,key)||{},tr=document.createElement('tr');cell(tr,r.run+'\n'+r.evaluation);cell(tr,(r.config.model||'?')+' / '+r.config.seed+' / '+(r.config.sampling||'global_random'));cell(tr,(r.config.provenance?.commit||'未记录').slice(0,12)+(r.config.provenance?.status?' (dirty)':''));cell(tr,(r.meta.data_identity?.manifest_sha256||r.config.data_identity?.manifest_sha256||'未记录').slice(0,12));for(const metric of ['mse','mae','temporal_r','spatial_r','f1_0.25','f1_0.5','skill'])metricCell(tr,r,metric);
- cell(tr,percent(score(r,'temporal_valid')?.mean));cell(tr,percent(score(r,'spatial_valid')?.mean));const c=cell(tr,r.meta.status+' ');if(r.meta.status==='completed'){let a=document.createElement('a');a.textContent='结果 CSV';a.href=r.report;c.append(a)}$('rows').append(tr);
+ cell(tr,percent(score(r,'temporal_valid')?.mean));cell(tr,percent(score(r,'spatial_valid')?.mean));const c=cell(tr,r.meta.status+' ');if(r.meta.status==='completed'){let a=document.createElement('a');a.textContent='结果 CSV';a.href=r.report;c.append(a);if(r.visualization){let v=document.createElement('a');v.textContent=' · 固定案例可视化';v.href=r.visualization;c.append(v)}}$('rows').append(tr);
  const v=num(s.mean);if(v!==null){let row=document.createElement('div');row.className='barrow';let label=document.createElement('span');label.textContent=r.run+' / '+r.evaluation;let track=document.createElement('div');track.className='track';let bar=document.createElement('div');bar.className='bar';bar.style.left=((Math.min(0,v)-lo)/span*100)+'%';bar.style.width=(Math.abs(v)/span*100)+'%';bar.style.background=v<0?'#c75c52':'#417add';track.append(bar);let value=document.createElement('span');value.textContent=fmt(v);row.append(label,track,value);$('chart').append(row)}
  let d=document.createElement('details'),title=document.createElement('summary'),pre=document.createElement('pre');title.textContent=r.run+' / '+r.evaluation;pre.textContent=JSON.stringify({training:r.config,evaluation:r.meta},null,2);d.append(title,pre);$('details').append(d);
  }if(!list.length)$('chart').textContent='暂无匹配的评测。完成一次训练或评测后重新生成台账。';}

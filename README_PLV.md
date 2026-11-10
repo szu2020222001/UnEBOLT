@@ -122,3 +122,10 @@ python experiment_ledger.py --runs runs --output reports/experiments.html
 `--sampling global_random` 保留原始全局窗口随机方式（默认）。新增 `scan_random` 和 `scan_sequential`，均按 manifest 的训练扫描与实际 frame_index 分段，不跨扫描或时间缺口，每个样本每轮恰好一次，不循环填充末批。两组均打乱块顺序；前者在各连续区段内随机排列窗口，后者保持块内连续顺序。两组有相同的 batch 大小分布和 162 次更新/epoch；原始全局随机为 159 次，因此原始结果只是辅助参照。使用独立采样 RNG，不改变模型初始化 RNG。
 
 运行 `python run_sampling_ablation.py` 对 MLP/TCN 各训练两种方式（seed=2026、50 epoch、batch=64、lr=3e-4、纯 MSE），全部验证选模后再测试。`python summarize_sampling.py` 导出到 runs/sampling_comparison_20261110，包含原始参照、验证选模记录和 seq-random 的被试配对差及 10000 次 bootstrap CI。相关的配对差是在 r 尺度上按被试算术平均，不等同于 HTML 总体 Fisher 均值之差；不作多重比较校正或显著性声明。单训练 seed 结论需多 seed 复验。所有新训练结果均使用独立目录，保留原始基线。
+## 固定测试案例可视化
+
+运行 `python visualize_plv.py` 为全部实验最新的 test 评测生成图；默认 scan 为 sub07-scan01。可用 `--only-run runs/<实验名>` 仅生成一个实验。六频段各保存一张时间图和 25/50/75% 有效窗口的三张空间图，图片与 index.html 位于原评测目录下 visualizations/<scan_UUID>/，重复生成创建新目录。生成后自动更新台账入口。
+
+时间图固定 F3-F4、C3-C4、O1-O2、FZ-PZ 四条边，同时画真实、预测及训练模板，再画全边均值与逐窗口 MAE。横轴为实际 EEG 标签窗口中心；数据不平滑。空间图三列为真实/预测/有符号误差，三行为完整 PLV 矩阵、标准电极位置连接图、MNE 电极平均连接强度拓扑。矩阵屏蔽对角线；连接图保留 top25%（误差图按绝对值），拓扑数值为电极所有非对角连接的平均。各实验 PLV 使用 [0,1]、误差使用 [-1,1] 固定尺度。电极坐标采用 MNE standard_1020 标准 montage，不是个体实际测量位置，也不是脑源图。该固定案例不能替代全部测试被试的统计结论。
+
+脚本核对数据清单/固定扫描内容哈希和保存的真实标签，visualization.json 保存窗口时间与索引、选边规则、配色尺度、输入预测与绘图脚本哈希。生成图不改变训练权重或已有评测分数。Matplotlib 是显式依赖。
