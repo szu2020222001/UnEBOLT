@@ -38,6 +38,9 @@ def generate(root, output=None):
     dest=output.parent/'assets'
     dest.mkdir(exist_ok=True)
     shutil.copyfile(assets/'mermaid-10.9.3.min.js',dest/'mermaid-10.9.3.min.js')
+    if (root/'hrf_comparison'/'index.html').exists():
+        link=os.path.relpath(root/'hrf_comparison'/'index.html',output.parent).replace(os.sep,'/')
+        html=html.replace('<h1>BOLD → EEG PLV 实验台账</h1>',f'<h1>BOLD → EEG PLV 实验台账</h1><p><a href="{link}">HRF 三种子汇总与注意力诊断</a></p>')
     html=html.replace('</main></html>', '''<script src="assets/mermaid-10.9.3.min.js"></script><script>
     if(window.mermaid){mermaid.initialize({startOnLoad:false,securityLevel:'strict',theme:'default',flowchart:{htmlLabels:true,useMaxWidth:true}});mermaid.run({querySelector:'.mermaid'}).then(()=>{document.getElementById('mermaid-status').textContent='结构图已用项目内 Mermaid 10.9.3 离线渲染。'}).catch(()=>{document.getElementById('mermaid-status').textContent='结构图渲染失败，请查看源代码或刷新页面。'});}
     </script></main></html>''')
