@@ -12,6 +12,7 @@ import joblib
 from plv_tracking import now, write_json, save_provenance, training_dir, new_evaluation, data_identity, sha256
 from experiment_ledger import generate
 from models.plv_model import Predictor
+from plv_sampling import ScanBatchSampler
 from plv_metrics import metrics, fisher_mean
 
 
@@ -63,6 +64,7 @@ def main(argv=None):
     p.add_argument('--epochs',type=int,default=50)
     p.add_argument('--batch-size',type=int,default=64)
     p.add_argument('--lr',type=float,default=3e-4)
+    p.add_argument('--sampling',choices=['global_random','scan_random','scan_sequential'],default='global_random')
     p.add_argument('--seed',type=int,default=2026)
     p.add_argument('--device',default='cuda')
     p.add_argument('--eval-only',action='store_true')
@@ -130,9 +132,24 @@ def main(argv=None):
         elif a.model in ('mlp','tcn'):
             model=Predictor(config['rois'],config['frames'],len(bands),kind=a.model).to(a.device)
             optimizer=torch.optim.AdamW(model.parameters(),lr=a.lr,weight_decay=.01)
-            loader=DataLoader(TensorDataset(torch.from_numpy(xt),torch.from_numpy(yt)),batch_size=a.batch_size,shuffle=True)
+            dataset=TensorDataset(torch.from_numpy(xt),torch.from_numpy(yt))
+            scan_sampler=None
+            if a.sampling=='global_random':
+                loader=DataLoader(dataset,batch_size=a.batch_size,shuffle=True)
+            else:
+                indices=[]
+                for row in by['train']:
+                    with np.load(root/row['file']) as scan:
+                        indices.append(scan['frame_index'].copy())
+                scan_sampler=ScanBatchSampler(indices,a.batch_size,
+                    mode='random' if a.sampling=='scan_random' else 'sequential',seed=a.seed)
+                loader=DataLoader(dataset,batch_sampler=scan_sampler)
+            record['batches_per_epoch']=len(loader)
+            record['samples_per_epoch']=len(dataset)
+            write_json(out/'run.json',record)
             best=float('inf'); log=[]
             for epoch in range(a.epochs):
+                if scan_sampler is not None: scan_sampler.set_epoch(epoch)
                 model.train(); total=0
                 for x,y in loader:
                     x,y=x.to(a.device),y.to(a.device); optimizer.zero_grad(set_to_none=True)

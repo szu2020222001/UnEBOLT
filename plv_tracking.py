@@ -45,7 +45,7 @@ def save_provenance(directory):
         (Path(directory) / 'source.patch').write_text(patch + '\n', encoding='utf-8')
     # 保存当前执行的 PLV 源文件，包含尚未被 Git 跟踪的新模块。
     root = Path(__file__).resolve().parent
-    paths = ['engine_plv.py', 'plv_metrics.py', 'plv_tracking.py', 'experiment_ledger.py',
+    paths = ['engine_plv.py', 'plv_sampling.py', 'run_sampling_ablation.py', 'plv_metrics.py', 'plv_tracking.py', 'experiment_ledger.py',
              'main_plv.py', 'inference_plv.py', 'models/plv_model.py',
              'dataset_maker/plv_dataset.py', 'build_plv_data.py']
     hashes = {}
